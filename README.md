@@ -93,4 +93,4 @@ MIT
 
 ---
 
-<a href="https://www.perplexity.ai/computer" target="_blank" rel="noopener noreferrer">Created with Perplexity Computer</a>
+<a href="https://github.com/YashasVM/I" target="_blank" rel="noopener noreferrer">Created with love.</a>
