@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Output images (user-generated)
+output/*.png
+output/*.jpg
+output/*.jpeg
+output/*.webp
+
+# Input images (user uploads)
+input/*.jpg
+input/*.jpeg
+input/*.png
+input/*.webp
+input/*.bmp
+input/*.tiff
+
+# rembg model cache
+.u2net/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
