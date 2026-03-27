@@ -2,7 +2,7 @@
 
 A background removal tool that runs entirely in the browser. No server, no uploads, no account — images are processed locally using WebGPU or WASM.
 
-**Live:** [img-gen-a93.pages.dev](https://img-gen-a93.pages.dev)
+**Live:** [img00.pages.dev](https://img00.pages.dev)
 
 ![desktop screenshot](static/screenshot-desktop.png)
 
@@ -38,7 +38,7 @@ The model is downloaded once (~170 MB) and cached by the browser. Subsequent use
 
 **Option 1 — Use the hosted version**
 
-Open [img-gen-a93.pages.dev](https://img-gen-a93.pages.dev) in Chrome for best performance.
+Open [img00.pages.dev](https://img00.pages.dev) in Chrome for best performance.
 
 **Option 2 — Run locally**
 
