@@ -408,7 +408,7 @@
           <div class="model-dl-bar" id="model-dl-bar"></div>
         </div>
         <div class="model-dl-row">
-          <span class="dl-info" id="model-dl-info">rmbg-1.4 · ~170mb · cached after first load</span>
+          <span class="dl-info" id="model-dl-info">rmbg-1.4 · adaptive input · browser cache enabled</span>
           <span class="model-dl-pct" id="model-dl-pct"></span>
         </div>
       </div>
@@ -475,7 +475,7 @@
 <script>
 /* ═══════════════════════════════════════════════════════════════
    IMG-GEN — WebGPU/WASM Background Remover
-   RMBG-1.4 via ONNX Runtime Web · 512px inference for speed
+   RMBG-1.4 via ONNX Runtime Web · adaptive model sizing
    ═══════════════════════════════════════════════════════════════ */
 
 const $ = id => document.getElementById(id);
@@ -510,10 +510,14 @@ const statusExec     = $('status-exec');
 let selectedFile      = null;
 let onnxSession       = null;
 let executionProvider = 'wasm';
+let modelInputName    = 'input';
+let modelOutputName   = null;
+let modelSize         = 1024;
 
-// Use 512 instead of 1024 — ~4x faster on WASM, quality still great
-const MODEL_SIZE = 512;
-const MODEL_URL  = 'https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model.onnx';
+// Pinned model revision plus browser-side caching keeps runtime behavior stable.
+const MODEL_URL        = 'https://huggingface.co/briaai/RMBG-1.4/resolve/2ceba5a5efaec153162aedea169f76caf9b46cf8/onnx/model.onnx';
+const MODEL_CACHE_NAME = 'img-gen-model-cache-v3';
+const MODEL_CACHE_KEY  = '/__img_gen__/models/rmbg-1.4-2ceba5a5.onnx';
 
 // ── Theme toggle ──────────────────────────────────────────────
 (function(){
@@ -546,6 +550,122 @@ const setExec     = msg => { statusExec.textContent = msg; };
 const showError   = msg => { errorBox.textContent = '⚠ ' + msg; errorBox.classList.add('visible'); };
 const hideError   = ()  => { errorBox.classList.remove('visible'); };
 const fmt         = b   => b < 1048576 ? (b/1024).toFixed(0)+'kb' : (b/1048576).toFixed(1)+'mb';
+const canCacheModel = () => window.isSecureContext && 'caches' in window;
+const getModelCacheRequest = () => new Request(new URL(MODEL_CACHE_KEY, location.origin).toString());
+
+function updateModelInfo(extra = '') {
+  const parts = ['rmbg-1.4', `${modelSize}px input`];
+  if (extra) parts.push(extra);
+  modelDlInfo.textContent = parts.join(' · ');
+}
+
+function normalizeDim(dim) {
+  return typeof dim === 'bigint' ? Number(dim) : dim;
+}
+
+function resolveSpatialSize(dims, fallback = modelSize) {
+  const numericDims = (dims || [])
+    .map(normalizeDim)
+    .filter(dim => Number.isFinite(dim) && dim > 0);
+
+  const tail = numericDims.slice(-2);
+  if (tail.length === 2 && tail[0] === tail[1]) return tail[0];
+  if (tail.length) return tail[tail.length - 1];
+  return fallback;
+}
+
+function syncModelMetadata(session) {
+  modelInputName  = session.inputNames?.[0] || 'input';
+  modelOutputName = session.outputNames?.[0] || null;
+  const inputIndex = session.inputNames?.indexOf(modelInputName) ?? -1;
+  const inputMeta = inputIndex >= 0 ? session.inputMetadata?.[inputIndex] : null;
+  modelSize = resolveSpatialSize(
+    inputMeta?.dimensions || inputMeta?.dims || inputMeta?.shape,
+    modelSize
+  );
+  updateModelInfo(canCacheModel() ? 'cached locally after first load' : 'browser cache unavailable here');
+}
+
+async function readCachedModel() {
+  if (!canCacheModel()) return null;
+  try {
+    const cache = await caches.open(MODEL_CACHE_NAME);
+    return cache.match(getModelCacheRequest());
+  } catch (err) {
+    console.warn('Model cache read failed:', err);
+    return null;
+  }
+}
+
+async function writeCachedModel(modelBytes) {
+  if (!canCacheModel()) return;
+  try {
+    const cache = await caches.open(MODEL_CACHE_NAME);
+    await cache.put(
+      getModelCacheRequest(),
+      new Response(modelBytes.slice(0), {
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(modelBytes.byteLength),
+          'Cache-Control': 'public, max-age=31536000, immutable',
+        },
+      })
+    );
+  } catch (err) {
+    console.warn('Model cache write failed:', err);
+  }
+}
+
+async function loadModelBytes() {
+  modelDlBarWrap.classList.add('visible');
+  const cached = await readCachedModel();
+  if (cached) {
+    const cachedBytes = await cached.arrayBuffer();
+    modelDlBar.style.width = '100%';
+    modelDlPct.textContent = 'cache';
+    modelStatus.textContent = 'loading cached model...';
+    return { buffer: cachedBytes, source: 'cache', totalBytes: cachedBytes.byteLength };
+  }
+
+  modelStatus.textContent = 'downloading model...';
+  modelDlBarWrap.classList.add('visible');
+
+  const resp = await fetch(MODEL_URL, { cache: 'force-cache' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+  const total   = parseInt(resp.headers.get('Content-Length') || '0', 10);
+  let   loaded  = 0;
+  const chunks  = [];
+  const reader  = resp.body.getReader();
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.length;
+    if (total) {
+      const pct = Math.round(loaded / total * 100);
+      modelDlBar.style.width = pct + '%';
+      modelDlPct.textContent = pct + '%';
+      modelStatus.textContent = `downloading... ${fmt(loaded)} / ${fmt(total)}`;
+    } else {
+      modelDlBar.style.width = '55%';
+      modelDlPct.textContent = fmt(loaded);
+      modelStatus.textContent = `downloading... ${fmt(loaded)}`;
+    }
+  }
+
+  const totalBytes = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const modelBuf = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    modelBuf.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  await writeCachedModel(modelBuf.buffer);
+  return { buffer: modelBuf.buffer, source: 'network', totalBytes };
+}
 
 // ── Init ──────────────────────────────────────────────────────
 async function init() {
@@ -579,56 +699,25 @@ async function init() {
     ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
 
     // ── Stream download with real progress ──────────────────
-    modelStatus.textContent = 'downloading model...';
-    modelDlBarWrap.classList.add('visible');
-
-    const resp = await fetch(MODEL_URL);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-    const total   = parseInt(resp.headers.get('Content-Length') || '0', 10);
-    let   loaded  = 0;
-    const chunks  = [];
-    const reader  = resp.body.getReader();
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      loaded += value.length;
-      if (total) {
-        const pct = Math.round(loaded / total * 100);
-        modelDlBar.style.width = pct + '%';
-        modelDlPct.textContent = pct + '%';
-        modelStatus.textContent = `downloading... ${fmt(loaded)} / ${fmt(total)}`;
-      } else {
-        modelDlBar.style.width = '55%';
-        modelDlPct.textContent = fmt(loaded);
-        modelStatus.textContent = `downloading... ${fmt(loaded)}`;
-      }
-    }
+    const { buffer: modelBuffer, source, totalBytes } = await loadModelBytes();
 
     // ── Parse model ─────────────────────────────────────────
     modelDlBar.style.width = '100%';
-    modelDlPct.textContent = '100%';
+    modelDlPct.textContent = source === 'cache' ? 'cache' : '100%';
     modelStatus.textContent = 'loading into onnx runtime...';
-
-    // Concat chunks efficiently
-    const totalBytes = chunks.reduce((s, c) => s + c.length, 0);
-    const modelBuf   = new Uint8Array(totalBytes);
-    let   offset     = 0;
-    for (const chunk of chunks) { modelBuf.set(chunk, offset); offset += chunk.length; }
 
     const opts = {
       executionProviders: executionProvider === 'webgpu' ? ['webgpu', 'wasm'] : ['wasm'],
       graphOptimizationLevel: 'all',
     };
 
-    onnxSession = await ort.InferenceSession.create(modelBuf.buffer, opts);
+    onnxSession = await ort.InferenceSession.create(modelBuffer, opts);
+    syncModelMetadata(onnxSession);
 
     modelLoading.classList.remove('visible');
     gpuDot.className = 'gpu-dot ready';
     gpuLabel.textContent = executionProvider === 'webgpu' ? 'webgpu · ready' : 'wasm · ready';
-    setExec('model ready · drop an image');
+    setExec(`model ready · ${modelSize}px input · ${source === 'cache' ? 'loaded from cache' : `downloaded ${fmt(totalBytes)}`}`);
 
   } catch(err) {
     modelLoading.classList.remove('visible');
@@ -697,23 +786,23 @@ async function runRemoval() {
     setProgress(20);
 
     // 2. Preprocess — single-pass, no redundant canvas
-    log(`preprocessing → ${MODEL_SIZE}×${MODEL_SIZE}...`);
+    log(`preprocessing → ${modelSize}×${modelSize}...`);
     const tensor = preprocess(imgData, origW, origH);
-    log(`tensor ready · [1,3,${MODEL_SIZE},${MODEL_SIZE}]`, 'done');
+    log(`tensor ready · [1,3,${modelSize},${modelSize}]`, 'done');
     setProgress(40);
 
     // 3. Inference
     log(`inference on ${executionProvider.toUpperCase()}...`);
     setProgress(45);
     const t1      = performance.now();
-    const results = await onnxSession.run({ input: tensor });
+    const results = await onnxSession.run({ [modelInputName]: tensor });
     const inferMs = Math.round(performance.now() - t1);
     log(`inference · ${inferMs}ms`, 'done');
     setProgress(75);
 
     // 4. Postprocess
     log('compositing mask...');
-    const mask = results[Object.keys(results)[0]];
+    const mask = results[modelOutputName || Object.keys(results)[0]];
     postprocess(mask, imgData, origW, origH);
     log('background removed', 'done');
     setProgress(95);
@@ -762,18 +851,18 @@ async function decodeImage(file) {
   return { imgData, origW, origH };
 }
 
-// Single-pass preprocess: draw directly to MODEL_SIZE canvas, normalize in one loop
+// Single-pass preprocess: draw directly to the model-sized canvas, normalize in one loop
 function preprocess(imgData, origW, origH) {
-  const canvas = new OffscreenCanvas(MODEL_SIZE, MODEL_SIZE);
+  const canvas = new OffscreenCanvas(modelSize, modelSize);
   const ctx    = canvas.getContext('2d');
 
   // Put original, then scale in one step
   const src = new OffscreenCanvas(origW, origH);
   src.getContext('2d').putImageData(imgData, 0, 0);
-  ctx.drawImage(src, 0, 0, MODEL_SIZE, MODEL_SIZE);
+  ctx.drawImage(src, 0, 0, modelSize, modelSize);
 
-  const px  = ctx.getImageData(0, 0, MODEL_SIZE, MODEL_SIZE).data;
-  const N   = MODEL_SIZE * MODEL_SIZE;
+  const px  = ctx.getImageData(0, 0, modelSize, modelSize).data;
+  const N   = modelSize * modelSize;
   const buf = new Float32Array(3 * N);
 
   // Precompute reciprocals to avoid repeated division
@@ -787,13 +876,14 @@ function preprocess(imgData, origW, origH) {
     buf[N*2 + i] = px[base+2] * rB - mB;
   }
 
-  return new ort.Tensor('float32', buf, [1, 3, MODEL_SIZE, MODEL_SIZE]);
+  return new ort.Tensor('float32', buf, [1, 3, modelSize, modelSize]);
 }
 
 // Postprocess: apply mask as alpha channel
 function postprocess(maskTensor, origImgData, origW, origH) {
   const maskData = maskTensor.data;
   const N        = maskData.length;
+  const maskSize = resolveSpatialSize(maskTensor.dims, Math.round(Math.sqrt(N)));
 
   // Normalize mask to 0-255
   let mn = Infinity, mx = -Infinity;
@@ -803,10 +893,10 @@ function postprocess(maskTensor, origImgData, origW, origH) {
   }
   const range = (mx - mn) || 1;
 
-  // Build mask at MODEL_SIZE
-  const maskCanvas = new OffscreenCanvas(MODEL_SIZE, MODEL_SIZE);
+  // Build mask at model output size.
+  const maskCanvas = new OffscreenCanvas(maskSize, maskSize);
   const mCtx       = maskCanvas.getContext('2d');
-  const mPx        = mCtx.createImageData(MODEL_SIZE, MODEL_SIZE);
+  const mPx        = mCtx.createImageData(maskSize, maskSize);
   for (let i = 0; i < N; i++) {
     const v = ((maskData[i] - mn) / range * 255) | 0;
     mPx.data[i*4] = mPx.data[i*4+1] = mPx.data[i*4+2] = v;

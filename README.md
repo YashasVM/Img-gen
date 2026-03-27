@@ -32,7 +32,7 @@
 
 Drop an image. Get a transparent PNG back. No sign-up. No upload. No watermark. No server ever sees your photo — the AI runs directly in your browser using WebGPU or WASM.
 
-Powered by [RMBG-1.4](https://huggingface.co/briaai/RMBG-1.4) (BiRefNet-lite by BRIA AI), loaded as an ONNX model and executed via [ONNX Runtime Web](https://onnxruntime.ai). The model downloads once (~170 MB), gets cached by the browser, and loads instantly every time after.
+Powered by [RMBG-1.4](https://huggingface.co/briaai/RMBG-1.4) (BiRefNet-lite by BRIA AI), loaded as an ONNX model and executed via [ONNX Runtime Web](https://onnxruntime.ai). The app pins a known-good model revision, detects the model's required input size from ONNX metadata, and stores the downloaded weights in browser cache for repeat visits.
 
 ---
 
@@ -104,7 +104,7 @@ image input
 createImageBitmap()          ← async decode, off main thread
     │
     ▼
-resize to 512×512            ← single-pass OffscreenCanvas
+resize to model input size   ← single-pass OffscreenCanvas
 normalize (ImageNet stats)   ← precomputed reciprocals, one loop
     │
     ▼
@@ -137,7 +137,8 @@ fonts       Syne + Geist Mono
 
 - The app uses `fetch()` to load the model from HuggingFace — this requires CORS headers, which `file://` URLs don't send. Always serve with `npx serve` or any HTTP server.
 - The `_headers` file sets `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` for Cloudflare Pages, which unlocks WASM multi-threading.
-- Inference runs at 512×512 input for speed. The original image resolution is preserved in the output.
+- Inference uses the square input size declared by the pinned ONNX model. The original image resolution is preserved in the output.
+- The model file is cached in the browser with Cache Storage after the first successful download when the app is served from `https://` or `localhost`.
 
 ---
 
